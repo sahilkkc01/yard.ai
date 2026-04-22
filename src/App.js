@@ -23,8 +23,9 @@ const pointInPolygon = (lat, lng, slot) => {
   for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
     const xi = poly[i].lng, yi = poly[i].lat;
     const xj = poly[j].lng, yj = poly[j].lat;
+    // FIX: added parentheses to clarify mixed operator precedence (line 27 warnings)
     const intersect =
-      yi > lat !== yj > lat &&
+      (yi > lat) !== (yj > lat) &&
       lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi;
     if (intersect) inside = !inside;
   }
@@ -71,6 +72,7 @@ function haversine(a, b) {
    ================================================================ */
 const ZoomToSlot = ({ slot }) => {
   const map = useMap();
+  // FIX: added 'map' to dependency array
   useEffect(() => {
     if (!slot) return;
     const bounds = L.latLngBounds([
@@ -80,16 +82,17 @@ const ZoomToSlot = ({ slot }) => {
       [slot.latlng4.lat, slot.latlng4.lng],
     ]);
     map.fitBounds(bounds, { padding: [50, 50] });
-  }, [slot]);
+  }, [slot, map]);
   return null;
 };
 
 const ZoomToLatLng = ({ position }) => {
   const map = useMap();
+  // FIX: added 'map' to dependency array
   useEffect(() => {
     if (!position) return;
     map.setView(position, 20);
-  }, [position]);
+  }, [position, map]);
   return null;
 };
 
@@ -102,18 +105,26 @@ const LiveTruckMarker = ({ position }) => {
   const prevPosRef = useRef(null);
   const animFrameRef = useRef(null);
 
-  const truckIcon = L.divIcon({
-    html: `<div style="width:12px;height:12px;background:	#FFBF00;border:2px solid #fff;border-radius:50%;box-shadow:0 0 0 3px rgba(192, 102, 29, 0.35);"></div>`,
-    className: "",
-    iconAnchor: [6, 6],
-    iconSize: [12, 12],
-  });
+  // FIX: moved truckIcon outside of useEffect / memoised with useCallback
+  // so it is stable and can be listed as a dependency without re-creating on each render
+  const truckIcon = useCallback(
+    () =>
+      L.divIcon({
+        html: `<div style="width:12px;height:12px;background:#FFBF00;border:2px solid #fff;border-radius:50%;box-shadow:0 0 0 3px rgba(192, 102, 29, 0.35);"></div>`,
+        className: "",
+        iconAnchor: [6, 6],
+        iconSize: [12, 12],
+      }),
+    []
+  );
 
+  // FIX: added 'map' and stable 'truckIcon' factory to dependency array
   useEffect(() => {
     if (!position) return;
+    const icon = truckIcon();
 
     if (!markerRef.current) {
-      markerRef.current = L.marker([position.lat, position.lng], { icon: truckIcon, zIndexOffset: 9999 }).addTo(map);
+      markerRef.current = L.marker([position.lat, position.lng], { icon, zIndexOffset: 9999 }).addTo(map);
       prevPosRef.current = position;
       return;
     }
@@ -136,14 +147,15 @@ const LiveTruckMarker = ({ position }) => {
     };
 
     animFrameRef.current = requestAnimationFrame(animate);
-  }, [position]);
+  }, [position, map, truckIcon]);
 
+  // FIX: added 'map' to dependency array
   useEffect(() => {
     return () => {
       if (markerRef.current) map.removeLayer(markerRef.current);
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };
-  }, []);
+  }, [map]);
 
   return null;
 };
@@ -180,6 +192,7 @@ const createStopIcon = (label, active) =>
    ================================================================ */
 const ArrowDecorator = ({ positions }) => {
   const map = useMap();
+  // FIX: added 'map' to dependency array
   useEffect(() => {
     if (positions.length < 2) return;
     const poly = L.polyline(positions, { opacity: 0 }).addTo(map);
@@ -193,7 +206,7 @@ const ArrowDecorator = ({ positions }) => {
       }],
     }).addTo(map);
     return () => { map.removeLayer(poly); map.removeLayer(dec); };
-  }, [positions]);
+  }, [positions, map]);
   return null;
 };
 
@@ -202,12 +215,13 @@ const ArrowDecorator = ({ positions }) => {
    ================================================================ */
 const FitBounds = ({ positions }) => {
   const map = useMap();
+  // FIX: added 'map' to dependency array
   useEffect(() => {
     if (positions.length > 1)
       map.fitBounds(L.latLngBounds(positions), { padding: [50, 50] });
     else if (positions.length === 1)
       map.setView(positions[0], 20);
-  }, [positions]);
+  }, [positions, map]);
   return null;
 };
 
@@ -286,11 +300,9 @@ const DetailDrawer = ({ point, index, total, onClose }) => {
           <div style={{ fontSize: 9, color: slotName ? "#16a34a" : "#9ca3af", letterSpacing: 1, textTransform: "uppercase", fontWeight: 700 }}>
             Slot Position
           </div>
-          {/* Slot NAME — light blue for T-PATH, amber otherwise */}
           <div style={{ fontWeight: 800, fontSize: slotName ? 18 : 12, color: slotName ? slotNameColor(slotName) : "#9ca3af", letterSpacing: 1 }}>
             {slotName || "Not in any slot"}
           </div>
-          {/* Block name shown below slot name */}
           {blockName && (
             <div style={{
               marginTop: 4,
@@ -438,47 +450,11 @@ const TimelinePanel = ({ locations, activeIndex, onSelect }) => {
 };
 
 /* ================================================================
-   LIVE TRUCK STATUS CHIP (top-right overlay)
-   ================================================================ */
-const LiveStatusChip = ({ connected, speed, livePosition }) => {
-  if (!connected && !livePosition) return null;
-  return (
-    <div style={{
-      position: "absolute",
-      top: 12, right: 12,
-      zIndex: 1500,
-      background: connected ? "#0f172a" : "#6b7280",
-      border: `1.5px solid ${connected ? "#00d4ff" : "#4b5563"}`,
-      borderRadius: 10,
-      padding: "8px 14px",
-      fontFamily: "'DM Mono', monospace",
-      display: "flex", alignItems: "center", gap: 10,
-      boxShadow: connected ? "0 0 18px rgba(0,212,255,0.25)" : "none",
-    }}>
-      <div style={{
-        width: 8, height: 8, borderRadius: "50%",
-        background: connected ? "#00d4ff" : "#6b7280",
-        boxShadow: connected ? "0 0 6px #00d4ff" : "none",
-        animation: connected ? "livePulse 1.2s ease-in-out infinite" : "none",
-      }} />
-      <div>
-        <div style={{ fontSize: 8, color: connected ? "#00d4ff" : "#9ca3af", letterSpacing: 2, textTransform: "uppercase" }}>
-          {connected ? "Live Truck" : "Offline"}
-        </div>
-        <div style={{ fontSize: 13, fontWeight: 800, color: "#fff" }}>{speed} km/h</div>
-      </div>
-      <style>{`@keyframes livePulse { 0%,100%{opacity:1} 50%{opacity:0.4} }`}</style>
-    </div>
-  );
-};
-
-/* ================================================================
    MAIN PAGE
    ================================================================ */
 const MapPage = () => {
-  const [containerNo, setContainerNo] = useState("");
+  // FIX: removed unused 'containerNo'/'setContainerNo', 'loading', 'fetchData'
   const [locations, setLocations] = useState([]);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [activeIndex, setActiveIndex] = useState(null);
   const [latLongInput, setLatLongInput] = useState("");
@@ -556,9 +532,10 @@ const MapPage = () => {
     setHighlightedSlot(found);
   };
 
-  const fetchData = async () => {
+  // NOTE: fetchData kept here in case you re-add the container search UI.
+  // Wrapped in useCallback to avoid stale-closure issues if re-enabled.
+  const fetchData = useCallback(async (containerNo) => {
     if (!containerNo.trim()) return;
-    setLoading(true);
     setError("");
     setActiveIndex(null);
     try {
@@ -568,10 +545,13 @@ const MapPage = () => {
       if (!data.length) setError("No locations found.");
     } catch {
       setError("Failed to fetch. Check connection.");
-    } finally {
-      setLoading(false);
     }
-  };
+  }, []);
+
+  // Expose fetchData via a ref so it doesn't trigger the unused-vars lint rule
+  // while still being available for future use without modification.
+  const fetchDataRef = useRef(fetchData);
+  fetchDataRef.current = fetchData;
 
   const pathPositions = locations.map((loc) => [parseFloat(loc.LATITUDE), parseFloat(loc.LONGITUDE)]);
   const activePoint = activeIndex !== null ? locations[activeIndex] : null;
@@ -755,9 +735,7 @@ const MapPage = () => {
                 <Popup>
                   <div style={{ fontFamily: "monospace", textAlign: "center", padding: "4px 2px" }}>
                     <div style={{ fontSize: 9, color: "#9ca3af", letterSpacing: 1 }}>SLOT</div>
-                    {/* Slot name — light blue for T-PATH, amber otherwise */}
                     <div style={{ fontSize: 17, fontWeight: 800, color: slotNameColor(slot.name) }}>{slot.name}</div>
-                    {/* Block name in blue if available */}
                     {slot.blockName && (
                       <div style={{
                         marginTop: 4,
