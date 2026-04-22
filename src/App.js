@@ -11,7 +11,7 @@ import L from "leaflet";
 import "leaflet-polylinedecorator";
 import axios from "axios";
 import { useState, useEffect } from "react";
-import slots from "./data/slots.json";
+import slots from "./data/TKD_Whole_Yard_Slot_Mapping_Data.json";
 
 /* ================================================================
    POINT-IN-POLYGON  (ray-casting for lat/lng quads)
