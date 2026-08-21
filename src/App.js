@@ -12,37 +12,63 @@ import L from "leaflet";
 import axios from "axios";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { io } from "socket.io-client";
-import slots from "./data/TKD_Whole_Yard_Slot_Mapping_Data.json";
+import rawSlots from "./data/TKD_Whole_Yard_Slot_Mapping_Data.json";
+
+const slots = Array.isArray(rawSlots)
+  ? rawSlots
+  : rawSlots.data || rawSlots.slots || rawSlots.features || [];
 
 /* ================================================================
    POINT-IN-POLYGON (ray-casting)
    ================================================================ */
+/* ================================================================
+   POINT-IN-POLYGON (NEW JSON FORMAT)
+================================================================ */
+
 const pointInPolygon = (lat, lng, slot) => {
-  const poly = [slot.latlng1, slot.latlng2, slot.latlng3, slot.latlng4];
+  const poly = slot.polygon;
+
+  if (!Array.isArray(poly) || poly.length < 3) return false;
+
   let inside = false;
+
   for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const xi = poly[i].lng, yi = poly[i].lat;
-    const xj = poly[j].lng, yj = poly[j].lat;
+    const yi = poly[i][0];
+    const xi = poly[i][1];
+
+    const yj = poly[j][0];
+    const xj = poly[j][1];
+
     const intersect =
       (yi > lat) !== (yj > lat) &&
       lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi;
+
     if (intersect) inside = !inside;
   }
+
   return inside;
 };
 
 const findSlotObj = (lat, lng) => {
   const f = parseFloat;
+
   for (const slot of slots) {
-    if (pointInPolygon(f(lat), f(lng), slot)) return slot;
+    if (pointInPolygon(f(lat), f(lng), slot)) {
+      return slot;
+    }
   }
+
   return null;
 };
 
-const findSlot = (lat, lng) => findSlotObj(lat, lng)?.name || null;
+const findSlot = (lat, lng) => findSlotObj(lat, lng)?.id || null;
 
-const slotNameColor = (name) =>
-  name === "T-PATH" ? "#38bdf8" : "#f59e0b";
+const slotNameColor = (id) =>
+  id === "T-PATH"
+    ? "#38bdf8"
+    : id === "RST"
+    ? "#fb923c"
+    : "#f59e0b";
 
 /* ================================================================
    HAVERSINE
@@ -65,6 +91,7 @@ function haversine(a, b) {
 const ViewportSlots = ({ activePoint, highlightedSlot }) => {
   const map = useMap();
   const [bounds, setBounds] = useState(null);
+  const [clickedSlot, setClickedSlot] = useState(null);
 
   useMapEvents({
     moveend: () => setBounds(map.getBounds()),
@@ -77,53 +104,96 @@ const ViewportSlots = ({ activePoint, highlightedSlot }) => {
 
   const visibleSlots = useMemo(() => {
     if (!bounds) return [];
+
     return slots.filter((slot) => {
-      const lats = [slot.latlng1.lat, slot.latlng2.lat, slot.latlng3.lat, slot.latlng4.lat];
-      const lngs = [slot.latlng1.lng, slot.latlng2.lng, slot.latlng3.lng, slot.latlng4.lng];
-      const slotBounds = L.latLngBounds(
-        [Math.min(...lats), Math.min(...lngs)],
-        [Math.max(...lats), Math.max(...lngs)]
+      const polygon = slot.polygon;
+
+      if (!Array.isArray(polygon) || polygon.length < 3) {
+        return false;
+      }
+
+      const lats = polygon.map((p) => Number(p[0]));
+      const lngs = polygon.map((p) => Number(p[1]));
+
+      return bounds.intersects(
+        L.latLngBounds(
+          [Math.min(...lats), Math.min(...lngs)],
+          [Math.max(...lats), Math.max(...lngs)]
+        )
       );
-      return bounds.intersects(slotBounds);
     });
   }, [bounds]);
 
   return (
     <>
-      {visibleSlots.map((slot, i) => {
-        const positions = [
-          [slot.latlng1.lat, slot.latlng1.lng],
-          [slot.latlng2.lat, slot.latlng2.lng],
-          [slot.latlng3.lat, slot.latlng3.lng],
-          [slot.latlng4.lat, slot.latlng4.lng],
-        ];
+      {visibleSlots.map((slot, index) => {
+        const slotId = slot.id || slot.ID || slot.name || "NO ID";
+
+        const positions = slot.polygon.map((point) => [
+          Number(point[0]),
+          Number(point[1]),
+        ]);
+
         const isHighlighted =
+          highlightedSlot?.id === slot.id ||
+          clickedSlot?.id === slot.id ||
           (activePoint &&
-            pointInPolygon(parseFloat(activePoint.LATITUDE), parseFloat(activePoint.LONGITUDE), slot)) ||
-          (highlightedSlot && highlightedSlot.name === slot.name);
-        const isTPath = slot.name === "T-PATH";
-        const isRST = slot.name === "RST";
+            pointInPolygon(
+              parseFloat(activePoint.LATITUDE),
+              parseFloat(activePoint.LONGITUDE),
+              slot
+            ));
 
         return (
           <Polygon
-            key={slot.name + i}
+            key={`${slotId}-${index}`}
             positions={positions}
+            eventHandlers={{
+              click: (e) => {
+                console.log("FULL CLICKED SLOT:", slot);
+                console.log("CLICKED SLOT ID:", slotId);
+
+                setClickedSlot(slot);
+
+                // Force popup open
+                e.target.openPopup();
+              },
+            }}
             pathOptions={{
-              color: isHighlighted ? "#16a34a" : isTPath ? "#38bdf8" : isRST ? "#fb923c" : "#cbd5e1",
-              weight: isHighlighted ? 2.5 : 1.5,
-              fillColor: isHighlighted ? "#bbf7d0" : isTPath ? "#bae6fd" : isRST ? "#fed7aa" : "#f1f5f9",
-              fillOpacity: isHighlighted ? 0.65 : isTPath ? 0.5 : isRST ? 0.5 : 0.35,
+              color: isHighlighted ? "#16a34a" : "#64748b",
+              weight: isHighlighted ? 3 : 1.5,
+              fillColor: isHighlighted ? "#86efac" : "#f1f5f9",
+              fillOpacity: isHighlighted ? 0.7 : 0.45,
             }}
           >
             <Popup>
-              <div style={{ fontFamily: "monospace", textAlign: "center" }}>
-                <div style={{ fontSize: 8, color: "#9ca3af" }}>SLOT</div>
-                <div style={{ fontSize: 16, fontWeight: 800, color: slotNameColor(slot.name) }}>{slot.name}</div>
-                {slot.blockName && (
-                  <div style={{ marginTop: 3, fontSize: 11, color: "#1d4ed8", fontWeight: 700 }}>
-                    Block · {slot.blockName}
-                  </div>
-                )}
+              <div
+                style={{
+                  minWidth: 180,
+                  padding: 10,
+                  textAlign: "center",
+                  fontFamily: "monospace",
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: 11,
+                    color: "#64748b",
+                    marginBottom: 8,
+                  }}
+                >
+                  CLICKED SLOT
+                </div>
+
+                <div
+                  style={{
+                    fontSize: 20,
+                    fontWeight: 800,
+                    color: "#f97316",
+                  }}
+                >
+                  {slotId}
+                </div>
               </div>
             </Popup>
           </Polygon>
@@ -138,18 +208,18 @@ const ViewportSlots = ({ activePoint, highlightedSlot }) => {
    ================================================================ */
 const ZoomToSlot = ({ slot }) => {
   const map = useMap();
+
   useEffect(() => {
-    if (!slot) return;
+    if (!slot?.polygon?.length) return;
+
     map.fitBounds(
-      L.latLngBounds([
-        [slot.latlng1.lat, slot.latlng1.lng],
-        [slot.latlng2.lat, slot.latlng2.lng],
-        [slot.latlng3.lat, slot.latlng3.lng],
-        [slot.latlng4.lat, slot.latlng4.lng],
-      ]),
-      { padding: [50, 50] }
+      L.latLngBounds(slot.polygon),
+      {
+        padding: [50, 50],
+      }
     );
   }, [slot, map]);
+
   return null;
 };
 
@@ -232,55 +302,85 @@ const makeStopIcon = (label, active) =>
    LIVE SLOT HUD — floating chip that shows current slot
    ================================================================ */
 const LiveSlotHUD = ({ position, speed, connected }) => {
-  const slotObj = position ? findSlotObj(position.lat, position.lng) : null;
+  const slotObj = position
+    ? findSlotObj(position.lat, position.lng)
+    : null;
 
   return (
-    <div style={{
-      position: "absolute",
-      bottom: 16,
-      left: "50%",
-      transform: "translateX(-50%)",
-      zIndex: 1200,
-      display: "flex",
-      alignItems: "center",
-      gap: 8,
-      background: "#0f172a",
-      border: `1.5px solid ${connected ? "#00d4ff" : "#334155"}`,
-      borderRadius: 50,
-      padding: "7px 16px",
-      boxShadow: "0 4px 20px rgba(0,0,0,0.25)",
-      fontFamily: "monospace",
-      pointerEvents: "none",
-      transition: "all 0.3s ease",
-      minWidth: 180,
-      justifyContent: "center",
-    }}>
-      {/* Status dot */}
-      <div style={{
-        width: 7, height: 7, borderRadius: "50%",
-        background: connected ? "#00d4ff" : "#475569",
-        boxShadow: connected ? "0 0 6px #00d4ff" : "none",
-        flexShrink: 0,
-      }} />
+    <div
+      style={{
+        position: "absolute",
+        bottom: 16,
+        left: "50%",
+        transform: "translateX(-50%)",
+        zIndex: 1200,
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        background: "#0f172a",
+        border: `1.5px solid ${connected ? "#00d4ff" : "#334155"}`,
+        borderRadius: 50,
+        padding: "7px 16px",
+        boxShadow: "0 4px 20px rgba(0,0,0,0.25)",
+        fontFamily: "monospace",
+        pointerEvents: "none",
+        minWidth: 180,
+        justifyContent: "center",
+      }}
+    >
+      <div
+        style={{
+          width: 7,
+          height: 7,
+          borderRadius: "50%",
+          background: connected ? "#00d4ff" : "#475569",
+          boxShadow: connected ? "0 0 6px #00d4ff" : "none",
+          flexShrink: 0,
+        }}
+      />
 
       {connected && slotObj ? (
         <>
-          <span style={{ fontSize: 9, color: "#64748b", letterSpacing: 1, textTransform: "uppercase" }}>SLOT</span>
-          <span style={{
-            fontSize: 13, fontWeight: 800,
-            color: slotNameColor(slotObj.name),
-            letterSpacing: 1,
-          }}>{slotObj.name}</span>
-          {slotObj.blockName && (
-            <>
-              <span style={{ fontSize: 9, color: "#64748b" }}>·</span>
-              <span style={{ fontSize: 10, fontWeight: 700, color: "#60a5fa" }}>{slotObj.blockName}</span>
-            </>
-          )}
-          <span style={{ fontSize: 9, color: "#475569", marginLeft: 4 }}>{speed} km/h</span>
+          <span
+            style={{
+              fontSize: 9,
+              color: "#64748b",
+              letterSpacing: 1,
+              textTransform: "uppercase",
+            }}
+          >
+            SLOT
+          </span>
+
+          <span
+            style={{
+              fontSize: 13,
+              fontWeight: 800,
+              color: slotNameColor(slotObj.id),
+              letterSpacing: 1,
+            }}
+          >
+            {slotObj.id}
+          </span>
+
+          <span
+            style={{
+              fontSize: 9,
+              color: "#475569",
+              marginLeft: 4,
+            }}
+          >
+            {speed} km/h
+          </span>
         </>
       ) : (
-        <span style={{ fontSize: 10, color: connected ? "#94a3b8" : "#475569", letterSpacing: 1 }}>
+        <span
+          style={{
+            fontSize: 10,
+            color: connected ? "#94a3b8" : "#475569",
+            letterSpacing: 1,
+          }}
+        >
           {connected ? "OUTSIDE SLOTS" : "TRUCK OFFLINE"}
         </span>
       )}
@@ -368,15 +468,15 @@ const TimelinePanel = ({ locations, activeIndex, onSelect, open, onToggle }) => 
                   <div style={{ fontSize: 8, color: "#9ca3af", marginBottom: 1 }}>
                     {loc.DATETIME?.replace("T", " ")}
                   </div>
-                  {slotObj?.name && (
+                  {slotObj?.id && (
                     <div style={{
                       fontSize: 9, fontWeight: 700,
-                      color: slotNameColor(slotObj.name),
-                      background: slotObj.name === "T-PATH" ? "#e0f2fe" : "#fffbeb",
+                      color: slotNameColor(slotObj.id),
+                      background: slotObj.id === "T-PATH" ? "#e0f2fe" : "#fffbeb",
                       padding: "1px 4px", borderRadius: 3,
                       display: "inline-block",
                     }}>
-                      {slotObj.name}
+                      {slotObj.id}
                       {slotObj.blockName && ` · ${slotObj.blockName}`}
                     </div>
                   )}
@@ -452,8 +552,8 @@ const DetailCard = ({ point, index, total, onClose }) => {
             <span>🅿️</span>
             <div>
               <div style={{ fontSize: 8, color: "#16a34a", letterSpacing: 1 }}>SLOT</div>
-              <div style={{ fontWeight: 800, fontSize: 15, color: slotNameColor(slotObj.name) }}>
-                {slotObj.name}
+              <div style={{ fontWeight: 800, fontSize: 15, color: slotNameColor(slotObj.id) }}>
+                {slotObj.id}
               </div>
             </div>
             {slotObj.blockName && (
@@ -559,7 +659,9 @@ const MapPage = () => {
   };
 
   const handleSearchBlock = () => {
-    const found = slots.find((s) => s.name.toLowerCase() === searchBlock.toLowerCase());
+   const found = slots.find(
+  (s) => s.id.toLowerCase() === searchBlock.trim().toLowerCase()
+);
     if (!found) return alert("Block not found");
     setHighlightedSlot(found);
   };
